@@ -1,43 +1,52 @@
 #!/bin/bash
 
-PKG_LST="pkg.lst"
-AUR_PKG_LST="aur_pkg.lst"
+set -eo pipefail
 
-if [[ $EUID -ne 0 ]]; then
-   echo "This script must be run as root" 
-   exit 1
+readonly PKG_LST="pkg.lst"
+readonly AUR_PKG_LST="aur_pkg.lst"
+readonly AUR_HELPER="yay"
+
+log_info() {
+    echo "INFO: $1"
+}
+
+log_error() {
+    echo "ERROR: $1" >&2
+    exit 1
+}
+
+if [[ "$EUID" -ne 0 ]]; then
+    log_error "This script must be run with sudo."
+fi
+
+if [[ -z "$SUDO_USER" ]]; then
+    log_error "This script must be run via sudo, not in a direct root shell."
 fi
 
 if [[ ! -f "$PKG_LST" ]]; then
-    echo "Package list file not found: $PKG_LST"
-    exit 1
+    log_error "Package list file not found: $PKG_LST"
 fi
-
-echo "Installing packages from $PKG_LST..."
-pacman -Syu --noconfirm --needed $(cat "$PKG_LST")
-
-if ! command -v yay &> /dev/null
-then
-    echo "yay could not be found, installing it now..."
-    if [ ! -z "$SUDO_USER" ]; then
-        sudo -u $SUDO_USER bash -c 'cd /tmp && git clone https://aur.archlinux.org/yay.git && cd yay && makepkg -si --noconfirm'
-    else
-        echo "SUDO_USER is not set. Cannot install yay."
-        exit 1
-    fi
-fi
-
 if [[ ! -f "$AUR_PKG_LST" ]]; then
-    echo "AUR Package list file not found: $AUR_PKG_LST"
-    exit 1
+    log_error "AUR package list file not found: $AUR_PKG_LST"
 fi
 
-echo "Installing AUR packages from $AUR_PKG_LST..."
-if [ ! -z "$SUDO_USER" ]; then
-    sudo -u $SUDO_USER yay -S --noconfirm --needed - < "$AUR_PKG_LST"
-else
-    echo "SUDO_USER is not set. Cannot install AUR packages."
-    exit 1
+log_info "Ensuring build dependencies (git, base-devel) are installed..."
+pacman -S --noconfirm --needed git base-devel
+
+log_info "Updating system and installing packages from '$PKG_LST'..."
+pacman -Syu --noconfirm --needed -- < "$PKG_LST"
+
+if ! command -v "$AUR_HELPER" &> /dev/null; then
+    log_info "'$AUR_HELPER' not found. Installing it now..."
+    
+    build_dir=$(mktemp -d)
+    
+    sudo -u "$SUDO_USER" bash -c "git clone https://aur.archlinux.org/${AUR_HELPER}.git '$build_dir' && cd '$build_dir' && makepkg -si --noconfirm"
+    
+    rm -rf "$build_dir"
 fi
 
-echo "Installation complete."
+log_info "Installing AUR packages from '$AUR_PKG_LST'..."
+sudo -u "$SUDO_USER" "$AUR_HELPER" -S --noconfirm --needed - < "$AUR_PKG_LST"
+
+log_info "Installation complete."
